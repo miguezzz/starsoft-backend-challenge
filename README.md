@@ -1,5 +1,9 @@
 # Teste para Desenvolvedor(a) Back-End Node.js/NestJS - Sistemas Distribuídos
 
+## System Design
+
+Acesse o link a seguir para visualizar um esboço do system design proposto para este desafio: https://link.excalidraw.com/l/1c9dSAsX8aQ/11vUQtjtbTA
+
 ## Introdução
 
 Bem-vindo(a) ao processo seletivo para a posição de **Desenvolvedor(a) Back-End** em nossa equipe! Este teste tem como objetivo avaliar suas habilidades técnicas em sistemas distribuídos, alta concorrência, e arquiteturas escaláveis utilizando Node.js e NestJS.
