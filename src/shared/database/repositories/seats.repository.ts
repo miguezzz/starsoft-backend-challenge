@@ -45,6 +45,13 @@ export class SeatsRepository {
       .where(inArray(seats.id, ids));
   }
 
+  async findByReservationId(reservationId: string) {
+    return this.drizzle.db
+      .select()
+      .from(seats)
+      .where(eq(seats.reservationId, reservationId));
+  }
+
   async updateStatus(id: string, status: 'available' | 'reserved' | 'sold') {
     const [updated] = await this.drizzle.db
       .update(seats)
@@ -54,10 +61,14 @@ export class SeatsRepository {
     return updated;
   }
 
-  async updateManyStatus(ids: string[], status: 'available' | 'reserved' | 'sold') {
+  async updateManyStatus(
+    ids: string[],
+    status: 'available' | 'reserved' | 'sold',
+    reservationId: string | null = null,
+  ) {
     return this.drizzle.db
       .update(seats)
-      .set({ status, updatedAt: new Date() })
+      .set({ status, reservationId, updatedAt: new Date() })
       .where(inArray(seats.id, ids))
       .returning();
   }

@@ -25,6 +25,18 @@ export const reservationStatusEnum = pgEnum('reservation_status', [
   'cancelled',
 ]);
 
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  name: varchar('name', { length: 255 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
 // Sessions Table (Sessões de Cinema)
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -51,6 +63,7 @@ export const seats = pgTable(
       .notNull(),
     seatNumber: varchar('seat_number', { length: 10 }).notNull(), // Ex: A1, B5, C10
     status: seatStatusEnum('status').default('available').notNull(),
+    reservationId: uuid('reservation_id').references(() => reservations.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -72,12 +85,10 @@ export const reservations = pgTable(
   'reservations',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    userId: varchar('user_id', { length: 255 }).notNull(), // Pode ser email ou ID
+    userId: varchar('user_id', { length: 255 }).notNull(),
+    userEmail: varchar('user_email', { length: 255 }).notNull(),
     sessionId: uuid('session_id')
       .references(() => sessions.id, { onDelete: 'cascade' })
-      .notNull(),
-    seatId: uuid('seat_id')
-      .references(() => seats.id, { onDelete: 'cascade' })
       .notNull(),
     status: reservationStatusEnum('status').default('pending').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -89,7 +100,6 @@ export const reservations = pgTable(
       .notNull(),
   },
   (table) => [
-    index('reservation_seat_idx').on(table.seatId),
     index('reservation_user_idx').on(table.userId),
     index('reservation_expires_idx').on(table.expiresAt),
   ],
@@ -136,18 +146,14 @@ export const seatsRelations = relations(seats, ({ one, many }) => ({
     fields: [seats.sessionId],
     references: [sessions.id],
   }),
-  reservations: many(reservations),
-  sales: many(sales),
+  reservations: one(reservations),
+  sales: one(sales),
 }));
 
 export const reservationsRelations = relations(reservations, ({ one }) => ({
   session: one(sessions, {
     fields: [reservations.sessionId],
     references: [sessions.id],
-  }),
-  seat: one(seats, {
-    fields: [reservations.seatId],
-    references: [seats.id],
   }),
   sale: one(sales, {
     fields: [reservations.id],

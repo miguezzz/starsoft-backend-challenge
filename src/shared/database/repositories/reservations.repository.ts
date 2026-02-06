@@ -30,25 +30,6 @@ export class ReservationsRepository {
       .where(eq(reservations.userId, userId));
   }
 
-  async findBySeatId(seatId: string) {
-    return this.drizzle.db
-      .select()
-      .from(reservations)
-      .where(eq(reservations.seatId, seatId));
-  }
-
-  async findPendingBySeatId(seatId: string) {
-    return this.drizzle.db
-      .select()
-      .from(reservations)
-      .where(
-        and(
-          eq(reservations.seatId, seatId),
-          eq(reservations.status, 'pending'),
-        ),
-      );
-  }
-
   async findExpired() {
     return this.drizzle.db
       .select()
