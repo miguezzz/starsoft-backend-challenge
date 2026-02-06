@@ -1,0 +1,1 @@
+ALTER TABLE "reservations" ADD COLUMN "user_email" varchar(255) NOT NULL;

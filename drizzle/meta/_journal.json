@@ -8,6 +8,20 @@
       "when": 1770242023961,
       "tag": "0000_careful_blob",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1770396562057,
+      "tag": "0001_cheerful_shard",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1770399809416,
+      "tag": "0002_flimsy_cobalt_man",
+      "breakpoints": true
     }
   ]
 }
