@@ -90,23 +90,41 @@ src/
 │   │   │   ├── create-session.dto.ts
 │   │   │   ├── update-session.dto.ts
 │   │   │   └── session-response.dto.ts
-│   │   ├── sessions.controller.ts   # HTTP layer
-│   │   ├── sessions.service.ts      # Business logic
-│   │   └── sessions.module.ts       # Module definition
+│   │   ├── sessions.controller.ts       # HTTP layer
+│   │   ├── sessions.controller.spec.ts  # Controller tests
+│   │   ├── sessions.service.ts          # Business logic
+│   │   ├── sessions.service.spec.ts     # Service tests
+│   │   └── sessions.module.ts           # Module definition
 │   │
 │   ├── reservations/     # Reservas temporárias (30s TTL)
+│   │   ├── dto/          # Data Transfer Objects
+│   │   │   ├── create-reservation.dto.ts
+│   │   │   ├── reservation-response.dto.ts
+│   │   │   └── index.ts
+│   │   ├── reservations.controller.ts       # HTTP layer
+│   │   ├── reservations.controller.spec.ts  # Controller tests (15 tests)
+│   │   ├── reservations.service.ts          # Business logic + Distributed locks
+│   │   ├── reservations.service.spec.ts     # Service tests (27 tests)
+│   │   └── reservations.module.ts           # Module definition
+│   │
 │   └── sales/            # Vendas confirmadas
 │
 ├── shared/               # Código compartilhado
-│   └── database/         # Camada de dados
-│       ├── repositories/ # Data access objects
-│       │   ├── sessions.repository.ts
-│       │   ├── seats.repository.ts
-│       │   ├── reservations.repository.ts
-│       │   └── sales.repository.ts
-│       ├── schema.ts     # Drizzle schema
-│       ├── drizzle.service.ts
-│       └── database.module.ts (@Global)
+│   ├── database/         # Camada de dados
+│   │   ├── repositories/ # Data access objects
+│   │   │   ├── sessions.repository.ts
+│   │   │   ├── seats.repository.ts
+│   │   │   ├── reservations.repository.ts
+│   │   │   └── sales.repository.ts
+│   │   ├── schema.ts     # Drizzle schema
+│   │   ├── drizzle.service.ts
+│   │   └── database.module.ts (@Global)
+│   │
+│   └── redis/            # Cache e locks distribuídos
+│       ├── redis.service.ts        # Distributed locks, caching
+│       ├── redis.service.spec.ts   # Service tests
+│       ├── redis.module.ts         # Module definition
+│       └── index.ts
 │
 ├── app.module.ts         # Root module
 └── main.ts               # Bootstrap
@@ -338,6 +356,81 @@ Aplicação rodando em:
 
 ---
 
+### Reservations (Reservas Temporárias)
+
+#### `POST /reservations` - Criar Reserva
+
+**Request Body:**
+```json
+{
+  "sessionId": "123e4567-e89b-12d3-a456-426614174000",
+  "seatIds": [
+    "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "b2c3d4e5-f6g7-8901-bcde-f12345678901"
+  ],
+  "userId": "user-123",
+  "userEmail": "user@example.com"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "reservation-uuid",
+  "sessionId": "session-uuid",
+  "seatIds": ["seat-uuid-1", "seat-uuid-2"],
+  "seatNumbers": ["A1", "A2"],
+  "userEmail": "user@example.com",
+  "status": "pending",
+  "createdAt": "2026-02-06T20:00:00.000Z",
+  "expiresAt": "2026-02-06T20:00:30.000Z",
+  "remainingSeconds": 30
+}
+```
+
+**Regras:**
+- ✅ Locks distribuídos para prevenir race conditions
+- ✅ IDs ordenados para prevenir deadlock
+- ✅ TTL de 30 segundos
+- ✅ Cache Redis automático
+- ✅ Liberação automática de locks
+
+**Possíveis Erros:**
+- `404 Not Found` - Sessão não existe
+- `409 Conflict` - Assentos já reservados ou em processo de reserva
+- `400 Bad Request` - Assentos de sessões diferentes
+
+#### `GET /reservations/:id` - Buscar Reserva
+
+**Response:** `200 OK`
+```json
+{
+  "id": "reservation-uuid",
+  "sessionId": "session-uuid",
+  "seatIds": ["seat-uuid-1"],
+  "seatNumbers": ["A1"],
+  "status": "pending",
+  "remainingSeconds": 15
+}
+```
+
+**Nota:** Consulta cache Redis primeiro, fallback para banco de dados.
+
+#### `DELETE /reservations/:id` - Cancelar Reserva
+
+**Response:** `204 No Content`
+
+**Regras:**
+- ✅ Apenas reservas com status `pending` podem ser canceladas
+- ✅ Assentos liberados automaticamente para `available`
+- ✅ Cache Redis removido
+
+**Possíveis Erros:**
+- `404 Not Found` - Reserva não existe
+- `400 Bad Request` - Reserva já confirmada/expirada
+
+---
+
 ## 💡 Decisões Técnicas
 
 ### 1. **PostgreSQL + Drizzle ORM**
@@ -441,24 +534,53 @@ User B: Reserva assento A1 (ao mesmo tempo)
 Resultado: 2 reservas no mesmo assento ❌
 ```
 
-### Solução Implementada
+### Solução Implementada no ReservationsService
 
-#### 1. **Redis Distributed Lock**
+#### 1. **Redis Distributed Lock com Múltiplos Assentos**
 
 ```typescript
-// Tentativa de lock com TTL
-const lockKey = `lock:seat:${seatId}`;
-const locked = await redis.set(lockKey, userId, 'NX', 'EX', 30);
+// 1. Ordenar IDs para prevenir deadlock
+const sortedSeatIds = [...seatIds].sort();
 
-if (!locked) {
-  throw new ConflictException('Seat already being reserved');
+// 2. Gerar chaves de lock
+const lockKeys = sortedSeatIds.map(id => `lock:seat:${id}`);
+const lockValue = randomUUID(); // Valor único para verificar ownership
+
+// 3. Adquirir múltiplos locks atomicamente
+const lockResult = await redisService.acquireMultipleLocks(
+  lockKeys,
+  lockValue,
+  10 // TTL em segundos
+);
+
+if (!lockResult.success) {
+  throw new ConflictException(
+    'One or more seats are currently being reserved by another user'
+  );
 }
 
-// Criar reserva no banco
-// ...
-
-// Release lock
-await redis.del(lockKey);
+try {
+  // 4. Validar assentos no banco de dados
+  const seats = await seatsRepository.findByIds(sortedSeatIds);
+  
+  // 5. Criar reserva
+  const reservation = await reservationsRepository.create(...);
+  
+  // 6. Atualizar status dos assentos
+  await seatsRepository.updateManyStatus(sortedSeatIds, 'reserved', reservation.id);
+  
+  // 7. Cachear no Redis com TTL de 30s
+  await redisService.set(
+    `reservation:${reservation.id}`,
+    reservationData,
+    30
+  );
+  
+  return reservation;
+} finally {
+  // 8. SEMPRE liberar locks (mesmo em caso de erro)
+  await redisService.releaseMultipleLocks(lockKeys, lockValue);
+}
 ```
 
 **Garantias:**
@@ -509,19 +631,69 @@ create(@Headers('idempotency-key') key: string) {
 }
 ```
 
-### Prevenir Deadlocks
+### Expiração Automática de Reservas
 
-**Ordenação de locks:**
+**Processamento de reservas expiradas:**
 ```typescript
-// ❌ User A: lock(seat1) → lock(seat2)
-// ❌ User B: lock(seat2) → lock(seat1)  → DEADLOCK
-
-// ✅ Sempre ordenar por ID
-const sortedSeats = seatIds.sort();
-for (const id of sortedSeats) {
-  await acquireLock(id);
+// Executado por cronjob a cada X segundos
+async processExpiredReservations(): Promise<number> {
+  // 1. Buscar reservas pending que já expiraram
+  const expiredReservations = await reservationsRepository.findExpired();
+  
+  // 2. Processar cada reserva
+  for (const reservation of expiredReservations) {
+    try {
+      // 2.1. Atualizar status para 'expired'
+      await reservationsRepository.updateStatus(reservation.id, 'expired');
+      
+      // 2.2. Liberar assentos de volta para 'available'
+      const seats = await seatsRepository.findByReservationId(reservation.id);
+      const seatIds = seats.map(s => s.id);
+      await seatsRepository.updateManyStatus(seatIds, 'available', null);
+      
+      this.logger.log(
+        `Expired reservation ${reservation.id}, released ${seatIds.length} seats`
+      );
+    } catch (error) {
+      // 2.3. Continuar processando mesmo se uma falhar
+      this.logger.error(`Failed to process expired reservation: ${error}`);
+    }
+  }
+  
+  return expiredReservations.length;
 }
 ```
+
+**Testes implementados:**
+- ✅ Processa múltiplas reservas expiradas
+- ✅ Libera assentos corretamente
+- ✅ Continua processando mesmo com erros individuais
+- ✅ Retorna 0 quando não há reservas expiradas
+
+### Prevenir Deadlocks
+
+**Ordenação de locks no ReservationsService:**
+```typescript
+// ❌ Cenário de deadlock:
+// User A tenta reservar: [seat-uuid-2, seat-uuid-1]
+// User B tenta reservar: [seat-uuid-1, seat-uuid-2]
+// User A adquire lock(seat-uuid-2), User B adquire lock(seat-uuid-1)
+// User A espera lock(seat-uuid-1), User B espera lock(seat-uuid-2)
+// → DEADLOCK
+
+// ✅ Solução implementada: sempre ordenar por ID
+const sortedSeatIds = [...seatIds].sort();
+const lockKeys = sortedSeatIds.map(id => `lock:seat:${id}`);
+
+// Agora ambos os usuários tentam adquirir locks na mesma ordem:
+// lock(seat-uuid-1) → lock(seat-uuid-2)
+// Quem conseguir o primeiro lock terá prioridade
+```
+
+**Testes implementados:**
+- ✅ Verifica ordenação automática de IDs desordenados
+- ✅ Valida que locks são sempre adquiridos em ordem crescente
+- ✅ Garante que locks são liberados mesmo em caso de erro
 
 ---
 
@@ -532,18 +704,33 @@ for (const id of sortedSeats) {
 ```
 src/
 ├── modules/
-│   └── sessions/
-│       ├── sessions.service.spec.ts       # Unit tests
-│       └── sessions.controller.spec.ts    # Integration tests
+│   ├── sessions/
+│   │   ├── sessions.service.spec.ts       # Unit tests
+│   │   └── sessions.controller.spec.ts    # Integration tests
+│   └── reservations/
+│       ├── reservations.service.spec.ts   # Unit tests (27 testes)
+│       └── reservations.controller.spec.ts # Integration tests (15 testes)
 test/
-└── sessions.e2e-spec.ts                   # E2E tests
+└── app.e2e-spec.ts                        # E2E tests
 ```
 
 ### Executar Testes
 
 ```bash
-# Unit tests
+# Todos os testes
 pnpm test
+
+# Apenas Sessions
+pnpm test:sessions-service
+pnpm test:sessions-controller
+
+# Apenas Reservations
+pnpm test:reservations
+pnpm test:reservations-service
+pnpm test:reservations-controller
+
+# Com watch mode
+pnpm test:watch
 
 # E2E tests
 pnpm test:e2e
@@ -552,11 +739,36 @@ pnpm test:e2e
 pnpm test:cov
 ```
 
+### Cobertura de Testes
+
+**Módulo Reservations (42 testes):**
+- ✅ Service: 27 testes cobrindo:
+  - Criação de reservas com locks distribuídos
+  - Prevenção de race conditions
+  - Deadlock prevention (ordenação de IDs)
+  - Validação de assentos e sessões
+  - Cache Redis com TTL
+  - Cancelamento de reservas
+  - Processamento de reservas expiradas
+  - Liberação automática de locks
+
+- ✅ Controller: 15 testes cobrindo:
+  - Endpoints HTTP (POST, GET, DELETE)
+  - Validação de DTOs
+  - Tratamento de exceções
+  - Status codes corretos (201, 200, 204)
+  - Edge cases e casos de concorrência
+
+**Módulo Sessions:**
+- ✅ Service: Testes completos de CRUD
+- ✅ Controller: Testes de endpoints
+
 ### Cobertura Alvo
 
-- ✅ **70%+** de cobertura geral
+- ✅ **60-70%+** de cobertura geral
 - ✅ **90%+** em Services (lógica crítica)
-- ✅ **60%+** em Controllers
+- ✅ **70%+** em Controllers
+- ✅ **100%** em casos de race condition e deadlock
 
 ---
 
