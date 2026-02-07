@@ -93,25 +93,34 @@ src/
 │   │   ├── dto/          # Data Transfer Objects
 │   │   │   ├── create-session.dto.ts
 │   │   │   ├── update-session.dto.ts
-│   │   │   └── session-response.dto.ts
-│   │   ├── sessions.controller.ts       # HTTP layer
-│   │   ├── sessions.controller.spec.ts  # Controller tests
-│   │   ├── sessions.service.ts          # Business logic
-│   │   ├── sessions.service.spec.ts     # Service tests
-│   │   └── sessions.module.ts           # Module definition
+│   │   │   ├── session-response.dto.ts
+│   │   │   ├── seat-response.dto.ts       # DTO para assentos
+│   │   │   └── index.ts
+│   │   ├── sessions.controller.ts         # HTTP layer + GET /sessions/:id/seats
+│   │   ├── sessions.controller.spec.ts    # Controller tests
+│   │   ├── sessions.service.ts            # Business logic + getSeats()
+│   │   ├── sessions.service.spec.ts       # Service tests
+│   │   └── sessions.module.ts             # Module definition
 │   │
 │   ├── reservations/     # Reservas temporárias (30s TTL)
 │   │   ├── dto/          # Data Transfer Objects
 │   │   │   ├── create-reservation.dto.ts
 │   │   │   ├── reservation-response.dto.ts
 │   │   │   └── index.ts
-│   │   ├── reservations.controller.ts       # HTTP layer
-│   │   ├── reservations.controller.spec.ts  # Controller tests (15 tests)
-│   │   ├── reservations.service.ts          # Business logic + Distributed locks
-│   │   ├── reservations.service.spec.ts     # Service tests (27 tests)
-│   │   └── reservations.module.ts           # Module definition
+│   │   ├── reservations.controller.ts     # HTTP layer
+│   │   ├── reservations.controller.spec.ts # Controller tests (15 tests)
+│   │   ├── reservations.service.ts        # Business logic + Distributed locks
+│   │   ├── reservations.service.spec.ts   # Service tests (27 tests)
+│   │   └── reservations.module.ts         # Module definition
 │   │
-│   └── sales/            # Vendas confirmadas
+│   └── sales/            # Vendas confirmadas (pagamentos)
+│       ├── dto/          # Data Transfer Objects
+│       │   ├── create-sale.dto.ts
+│       │   ├── sale-response.dto.ts
+│       │   └── index.ts
+│       ├── sales.controller.ts            # HTTP layer
+│       ├── sales.service.ts               # Business logic + Payment confirmation
+│       └── sales.module.ts                # Module definition
 │
 ├── shared/               # Código compartilhado
 │   ├── database/         # Camada de dados
@@ -119,19 +128,38 @@ src/
 │   │   │   ├── sessions.repository.ts
 │   │   │   ├── seats.repository.ts
 │   │   │   ├── reservations.repository.ts
-│   │   │   └── sales.repository.ts
-│   │   ├── schema.ts     # Drizzle schema
+│   │   │   └── sales.repository.ts        # Repository de vendas
+│   │   ├── schema.ts     # Drizzle schema (sessions, seats, reservations, sales)
 │   │   ├── drizzle.service.ts
-│   │   └── database.module.ts (@Global)
+│   │   ├── database.module.ts (@Global)
+│   │   └── index.ts
 │   │
-│   └── redis/            # Cache e locks distribuídos
-│       ├── redis.service.ts        # Distributed locks, caching
-│       ├── redis.service.spec.ts   # Service tests
-│       ├── redis.module.ts         # Module definition
-│       └── index.ts
+│   ├── redis/            # Cache e locks distribuídos
+│   │   ├── redis.service.ts               # Distributed locks, caching
+│   │   ├── redis.service.spec.ts          # Service tests
+│   │   ├── redis.module.ts                # Module definition
+│   │   └── index.ts
+│   │
+│   ├── filters/          # Exception filters
+│   ├── guards/           # Auth guards
+│   └── interceptors/     # HTTP interceptors
 │
-├── app.module.ts         # Root module
-└── main.ts               # Bootstrap
+├── app.module.ts         # Root module (SessionsModule, ReservationsModule, SalesModule)
+└── main.ts               # Bootstrap + Swagger setup
+
+test/
+├── app.e2e-spec.ts                        # E2E tests
+├── test-complete-flow.js                  # Script Node.js - Fluxo completo Session→Reservation→Sale
+├── test-complete-flow.sh                  # Script Bash - Fluxo completo
+├── test-race-condition.js                 # Script de teste de concorrência (20 usuários)
+└── test-race-condition.sh                 # Script de teste de race condition
+
+drizzle/
+├── 0000_careful_blob.sql                  # Migração inicial
+├── 0001_cheerful_shard.sql                # Adiciona campos
+├── 0002_flimsy_cobalt_man.sql             # Adiciona user_email em reservations
+├── 0003_black_wraith.sql                  # Adiciona user_email em sales (renomeia seat_id)
+└── meta/                                   # Metadata de migrações
 ```
 
 ### Princípios Aplicados
@@ -937,7 +965,6 @@ pnpm test:cov
 - ✅ Ordem dos campos no `salesRepository.create()` estava incorreta
   - Ordem correta: reservationId → userId → userEmail → sessionId → amount
   - Alinhado com schema do banco de dados
-- ✅ Migração 0003_black_wraith.sql aplicada (renomeia seat_id → user_email)
 - ✅ Script de teste atualizado para usar novo endpoint `/sessions/:id/seats`
 - ✅ Script de teste usando campo `amount` ao invés de `totalPrice`
 
@@ -969,36 +996,11 @@ CREATE TABLE "sales" (
 
 ## 🚀 Melhorias Futuras
 
-### Alta Prioridade
-- [ ] Implementar autenticação (JWT)
+- [ ] Implementar autenticação
 - [ ] Rate limiting por IP/usuário
 - [ ] Circuit breaker para dependências externas
 - [ ] Health checks avançados
-
-### Média Prioridade
 - [ ] Retry com backoff exponencial no Kafka
 - [ ] Batch processing de eventos
 - [ ] Caching de queries frequentes
 - [ ] Metrics (Prometheus)
-
-### Baixa Prioridade
-- [ ] GraphQL API
-- [ ] WebSockets para updates em tempo real
-- [ ] Multi-tenancy
-- [ ] Internacionalização (i18n)
-
----
-
-## 📝 Licença
-
-Este projeto foi desenvolvido como parte de um desafio técnico.
-
----
-
-## 👥 Autor
-
-Desenvolvido seguindo as melhores práticas de:
-- Clean Architecture
-- SOLID Principles
-- Domain-Driven Design
-- Test-Driven Development
