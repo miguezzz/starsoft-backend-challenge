@@ -10,6 +10,10 @@ Sistema de venda de ingressos para cinema com controle de concorrência, garanti
 
 ---
 
+## System Design
+
+Acesse o link a seguir para visualizar um esboço do system design proposto para este desafio: https://link.excalidraw.com/l/1c9dSAsX8aQ/11vUQtjtbTA
+
 ## 📋 Índice
 
 - [Visão Geral](#-visão-geral)
