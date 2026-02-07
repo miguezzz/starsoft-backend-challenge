@@ -24,7 +24,7 @@ import { CreateSaleDto, SaleResponseDto } from './dto';
  * Handles conversion of reservations into confirmed sales
  * Follows REST principles and OpenAPI documentation
  */
-@ApiTags('Sales')
+@ApiTags('sales')
 @Controller('sales')
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}

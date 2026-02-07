@@ -26,7 +26,7 @@ import { CreateReservationDto, ReservationResponseDto } from './dto';
  * Follows REST principles and OpenAPI documentation (Open/Closed Principle)
  * Delegates business logic to service layer (Single Responsibility)
  */
-@ApiTags('Reservations')
+@ApiTags('reservations')
 @Controller('reservations')
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
