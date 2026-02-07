@@ -56,6 +56,25 @@ export class ReservationsController {
     return this.reservationsService.create(createReservationDto);
   }
 
+  @Post(':id/confirm')
+  @ApiOperation({
+    summary: 'Confirm a reservation',
+    description:
+      'Confirms a pending reservation, converting it to a sale. Must be done within 30 seconds.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Reservation confirmed and converted to sale',
+    type: ReservationResponseDto,
+  })
+  @ApiNotFoundResponse({ description: 'Reservation not found' })
+  @ApiBadRequestResponse({
+    description: 'Cannot confirm reservation with current status or expired',
+  })
+  async confirm(@Param('id', ParseUUIDPipe) id: string): Promise<ReservationResponseDto> {
+    return this.reservationsService.confirm(id);
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'Get reservation details',

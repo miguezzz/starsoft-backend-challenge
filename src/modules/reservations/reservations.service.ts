@@ -191,6 +191,47 @@ export class ReservationsService {
     }
   }
 
+  async confirm(id: string): Promise<ReservationResponseDto> {
+    this.logger.log(`Confirming reservation ${id}`);
+
+    // 1. Find reservation
+    const reservation = await this.reservationsRepository.findById(id);
+    if (!reservation) {
+      throw new NotFoundException(`Reservation with ID ${id} not found`);
+    }
+
+    // 2. Validate reservation can be confirmed
+    if (reservation.status !== 'pending') {
+      throw new BadRequestException(
+        `Cannot confirm reservation with status: ${reservation.status}`,
+      );
+    }
+
+    if (reservation.expiresAt < new Date()) {
+      throw new BadRequestException('Cannot confirm expired reservation');
+    }
+
+    // 3. Update reservation status to confirmed
+    await this.reservationsRepository.updateStatus(id, 'confirmed');
+
+    this.logger.log(`Reservation ${id} confirmed`);
+
+    // 4. Build response
+    const seats = await this.seatsRepository.findByReservationId(id);
+
+    return {
+      id: reservation.id,
+      sessionId: reservation.sessionId,
+      seatIds: seats.map((s) => s.id),
+      seatNumbers: seats.map((s) => s.seatNumber),
+      userEmail: reservation.userEmail,
+      status: 'confirmed',
+      createdAt: reservation.createdAt,
+      expiresAt: reservation.expiresAt,
+      remainingSeconds: 0,
+    };
+  }
+
   /**
    * Get reservation by ID
    *

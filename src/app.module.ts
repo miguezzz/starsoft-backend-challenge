@@ -6,6 +6,7 @@ import { DatabaseModule } from './shared/database';
 import { RedisModule } from './shared/redis';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { ReservationsModule } from './modules/reservations/reservations.module';
+import { SalesModule } from './modules/sales/sales.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ReservationsModule } from './modules/reservations/reservations.module';
     RedisModule,
     SessionsModule,
     ReservationsModule,
+    SalesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

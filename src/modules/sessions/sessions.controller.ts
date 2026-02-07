@@ -26,6 +26,7 @@ import {
   CreateSessionDto,
   UpdateSessionDto,
   SessionResponseDto,
+  SeatResponseDto,
 } from './dto';
 
 @ApiTags('sessions')
@@ -139,5 +140,27 @@ export class SessionsController {
   })
   remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     return this.sessionsService.remove(id);
+  }
+
+  @Get(':id/seats')
+  @ApiOperation({
+    summary: 'Listar assentos da sessão',
+    description: 'Retorna todos os assentos de uma sessão com seus status (available, reserved, sold)',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'UUID da sessão',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de assentos retornada com sucesso',
+    type: [SeatResponseDto],
+  })
+  @ApiNotFoundResponse({
+    description: 'Sessão não encontrada',
+  })
+  getSeats(@Param('id', ParseUUIDPipe) id: string): Promise<SeatResponseDto[]> {
+    return this.sessionsService.getSeats(id);
   }
 }

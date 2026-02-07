@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { SessionsRepository, SeatsRepository, seats } from '@/shared/database';
-import { CreateSessionDto, UpdateSessionDto, SessionResponseDto } from './dto';
+import { CreateSessionDto, UpdateSessionDto, SessionResponseDto, SeatResponseDto } from './dto';
 import { eq } from 'drizzle-orm';
 
 @Injectable()
@@ -212,6 +212,29 @@ export class SessionsService {
       this.logger.error(`Failed to delete session: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  async getSeats(sessionId: string): Promise<SeatResponseDto[]> {
+    this.logger.log(`Fetching seats for session: ${sessionId}`);
+
+    // Verificar se a sessão existe
+    const session = await this.sessionsRepository.findById(sessionId);
+    if (!session) {
+      throw new NotFoundException(`Session with ID ${sessionId} not found`);
+    }
+
+    // Buscar assentos da sessão
+    const seats = await this.seatsRepository.findBySessionId(sessionId);
+
+    return seats.map((seat) => ({
+      id: seat.id,
+      sessionId: seat.sessionId,
+      seatNumber: seat.seatNumber,
+      status: seat.status as 'available' | 'reserved' | 'sold',
+      reservationId: seat.reservationId,
+      createdAt: seat.createdAt,
+      updatedAt: seat.updatedAt,
+    }));
   }
 
   /**

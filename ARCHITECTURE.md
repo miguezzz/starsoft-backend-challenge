@@ -354,6 +354,34 @@ Aplicação rodando em:
 
 **Response:** `204 No Content`
 
+#### `GET /sessions/:id/seats` - Listar Assentos da Sessão
+
+**Response:** `200 OK`
+```json
+[
+  {
+    "id": "seat-uuid-1",
+    "sessionId": "session-uuid",
+    "seatNumber": "A1",
+    "status": "available",
+    "reservationId": null,
+    "createdAt": "2026-02-04T20:00:00.000Z",
+    "updatedAt": "2026-02-04T20:00:00.000Z"
+  },
+  {
+    "id": "seat-uuid-2",
+    "sessionId": "session-uuid",
+    "seatNumber": "A2",
+    "status": "reserved",
+    "reservationId": "reservation-uuid",
+    "createdAt": "2026-02-04T20:00:00.000Z",
+    "updatedAt": "2026-02-04T20:01:00.000Z"
+  }
+]
+```
+
+**Uso:** Buscar assentos diretamente da tabela `seats` com seus status atuais (available, reserved, sold) e FK da sessão.
+
 ---
 
 ### Reservations (Reservas Temporárias)
@@ -428,6 +456,81 @@ Aplicação rodando em:
 **Possíveis Erros:**
 - `404 Not Found` - Reserva não existe
 - `400 Bad Request` - Reserva já confirmada/expirada
+
+---
+
+### Sales (Vendas Confirmadas)
+
+#### `POST /sales` - Confirmar Pagamento (Criar Venda)
+
+**Request Body:**
+```json
+{
+  "reservationId": "reservation-uuid"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "sale-uuid",
+  "reservationId": "reservation-uuid",
+  "sessionId": "session-uuid",
+  "seatIds": ["seat-uuid-1", "seat-uuid-2"],
+  "seatNumbers": ["A1", "A2"],
+  "userEmail": "user@example.com",
+  "amount": "50.00",
+  "createdAt": "2026-02-06T20:00:25.000Z"
+}
+```
+
+**Regras:**
+- ✅ Valida que reserva existe e está como `pending`
+- ✅ Valida que reserva não expirou
+- ✅ Calcula preço total: `ticketPrice × quantidade de assentos`
+- ✅ Atualiza status da reserva para `confirmed`
+- ✅ Atualiza status dos assentos de `reserved` → `sold`
+- ✅ Remove reserva do cache Redis
+
+**Possíveis Erros:**
+- `404 Not Found` - Reserva não existe
+- `400 Bad Request` - Reserva já confirmada/expirada/cancelada ou expirou durante pagamento
+
+#### `GET /sales/:id` - Buscar Venda
+
+**Response:** `200 OK`
+```json
+{
+  "id": "sale-uuid",
+  "reservationId": "reservation-uuid",
+  "sessionId": "session-uuid",
+  "seatIds": ["seat-uuid-1"],
+  "seatNumbers": ["A1"],
+  "userEmail": "user@example.com",
+  "amount": "25.00",
+  "createdAt": "2026-02-06T20:00:25.000Z"
+}
+```
+
+#### `GET /sales/user/:userId` - Buscar Compras do Usuário
+
+**Response:** `200 OK`
+```json
+[
+  {
+    "id": "sale-uuid-1",
+    "reservationId": "reservation-uuid-1",
+    "sessionId": "session-uuid-1",
+    "seatIds": ["seat-uuid-1"],
+    "seatNumbers": ["A1"],
+    "userEmail": "user@example.com",
+    "amount": "25.00",
+    "createdAt": "2026-02-06T20:00:25.000Z"
+  }
+]
+```
+
+**Nota:** Retorna histórico de compras ordenado por data (mais recente primeiro).
 
 ---
 
@@ -711,8 +814,31 @@ src/
 │       ├── reservations.service.spec.ts   # Unit tests (27 testes)
 │       └── reservations.controller.spec.ts # Integration tests (15 testes)
 test/
-└── app.e2e-spec.ts                        # E2E tests
+├── app.e2e-spec.ts                        # E2E tests
+├── test-complete-flow.js                  # Script Node.js - Fluxo completo
+└── test-complete-flow.sh                  # Script Bash - Fluxo completo
 ```
+
+### Scripts de Teste End-to-End
+
+**Teste de Fluxo Completo**: Valida o ciclo completo de compra de ingressos
+
+```bash
+# Versão Node.js (recomendado)
+node test-complete-flow.js
+
+# Versão Bash (alternativa)
+./test-complete-flow.sh
+```
+
+**Fluxo testado:**
+1. ✅ Criar sessão de cinema (20 assentos)
+2. ✅ Buscar assentos disponíveis via `/sessions/:id/seats`
+3. ✅ Criar reserva (3 assentos)
+4. ✅ Verificar reserva criada
+5. ✅ Confirmar pagamento (criar venda)
+6. ✅ Validar assentos mudaram de `reserved` → `sold`
+7. ✅ Verificar histórico de compras do usuário
 
 ### Executar Testes
 
@@ -762,6 +888,13 @@ pnpm test:cov
 **Módulo Sessions:**
 - ✅ Service: Testes completos de CRUD
 - ✅ Controller: Testes de endpoints
+- ✅ Novo endpoint: GET `/sessions/:id/seats` para buscar assentos com status
+
+**Módulo Sales:**
+- ✅ Service: Lógica completa de confirmação de pagamento
+- ✅ Controller: Endpoints para criar venda e buscar histórico
+- ✅ Integração com módulo de reservations
+- ✅ Validação de expiração de reservas
 
 ### Cobertura Alvo
 
@@ -769,6 +902,55 @@ pnpm test:cov
 - ✅ **90%+** em Services (lógica crítica)
 - ✅ **70%+** em Controllers
 - ✅ **100%** em casos de race condition e deadlock
+
+---
+
+## 📝 Changelog Recente
+
+### [2026-02-07] - Completado Módulo Sales + Endpoint de Assentos
+
+**Adicionado:**
+- ✅ **GET `/sessions/:id/seats`** - Endpoint para buscar assentos de uma sessão
+  - Retorna todos os assentos com status (available, reserved, sold)
+  - Busca diretamente da tabela `seats` usando FK `sessionId`
+  - DTO `SeatResponseDto` com todos os campos da tabela
+
+- ✅ **Módulo Sales completo**
+  - POST `/sales` - Confirmar pagamento e criar venda
+  - GET `/sales/:id` - Buscar venda por ID
+  - GET `/sales/user/:userId` - Histórico de compras do usuário
+  - Validação de expiração de reservas
+  - Atualização automática de status (reserva → confirmed, assentos → sold)
+  - Remoção de cache Redis após confirmação
+
+- ✅ **Scripts de teste E2E**
+  - `test-complete-flow.js` - Versão Node.js com saída colorida
+  - `test-complete-flow.sh` - Versão Bash com curl + jq
+  - Testa fluxo completo: Session → Reservation → Sale
+
+**Corrigido:**
+- ✅ SalesModule não estava importado no AppModule (erro 404)
+- ✅ Ordem dos campos no `salesRepository.create()` estava incorreta
+  - Ordem correta: reservationId → userId → userEmail → sessionId → amount
+  - Alinhado com schema do banco de dados
+- ✅ Migração 0003_black_wraith.sql aplicada (renomeia seat_id → user_email)
+- ✅ Script de teste atualizado para usar novo endpoint `/sessions/:id/seats`
+- ✅ Script de teste usando campo `amount` ao invés de `totalPrice`
+
+**Estrutura do Banco Atualizada:**
+```sql
+-- Tabela sales
+CREATE TABLE "sales" (
+  "id" uuid PRIMARY KEY,
+  "reservation_id" uuid NOT NULL REFERENCES reservations(id),
+  "user_id" varchar(255) NOT NULL,
+  "user_email" varchar(255) NOT NULL,  -- Campo adicionado
+  "session_id" uuid NOT NULL REFERENCES sessions(id),
+  "amount" numeric(10, 2) NOT NULL,
+  "confirmed_at" timestamp DEFAULT now() NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+```
 
 ---
 

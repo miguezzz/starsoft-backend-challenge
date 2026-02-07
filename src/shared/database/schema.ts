@@ -114,11 +114,9 @@ export const sales = pgTable(
       .references(() => reservations.id, { onDelete: 'cascade' })
       .notNull(),
     userId: varchar('user_id', { length: 255 }).notNull(),
+    userEmail: varchar('user_email', { length: 255 }).notNull(),
     sessionId: uuid('session_id')
       .references(() => sessions.id, { onDelete: 'cascade' })
-      .notNull(),
-    seatId: uuid('seat_id')
-      .references(() => seats.id, { onDelete: 'cascade' })
       .notNull(),
     amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
     confirmedAt: timestamp('confirmed_at', { withTimezone: true })
@@ -169,9 +167,5 @@ export const salesRelations = relations(sales, ({ one }) => ({
   session: one(sessions, {
     fields: [sales.sessionId],
     references: [sessions.id],
-  }),
-  seat: one(seats, {
-    fields: [sales.seatId],
-    references: [seats.id],
   }),
 }));
