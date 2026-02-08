@@ -5,6 +5,7 @@ import { SessionsRepository } from './repositories/sessions.repository';
 import { SeatsRepository } from './repositories/seats.repository';
 import { ReservationsRepository } from './repositories/reservations.repository';
 import { SalesRepository } from './repositories/sales.repository';
+import { UsersRepository } from './repositories/users.repository';
 
 @Global()
 @Module({
@@ -15,6 +16,7 @@ import { SalesRepository } from './repositories/sales.repository';
     SeatsRepository,
     ReservationsRepository,
     SalesRepository,
+    UsersRepository,
   ],
   exports: [
     DrizzleService,
@@ -22,6 +24,7 @@ import { SalesRepository } from './repositories/sales.repository';
     SeatsRepository,
     ReservationsRepository,
     SalesRepository,
+    UsersRepository,
   ],
 })
 export class DatabaseModule {}
