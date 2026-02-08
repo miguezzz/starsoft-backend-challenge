@@ -61,9 +61,20 @@ Sistema desenvolvido para gerenciar venda de ingressos de cinema com foco em:
 
 **Por quê Redis?**
 - ✅ Lock distribuído com `SET NX EX` (evita race conditions)
-- ✅ TTL nativo para expiração de reservas (30s)
+- ✅ Conexão para BullMQ (job queue baseado em Redis)
 - ✅ Pub/Sub para invalidação de cache
 - ✅ Performance sub-millisecond
+
+### Filas e Jobs
+- **BullMQ 5.67.3**: Job queue baseado em Redis para tarefas assíncronas
+- **@nestjs/bullmq 11.0.4**: Integração oficial do BullMQ com NestJS
+
+**Por quê BullMQ?**
+- ✅ Expiração automática de reservas (30s delayed jobs)
+- ✅ Retry automático com backoff exponencial
+- ✅ Concorrência configurável por processor
+- ✅ Job deduplication com jobId único
+- ✅ Cancelamento de jobs quando pagamento confirmado
 
 ### Sistema de Mensageria
 - **Apache Kafka 7.5**: Event streaming, alta throughput, garantias de entrega
@@ -107,20 +118,32 @@ src/
 │   │   │   ├── create-reservation.dto.ts
 │   │   │   ├── reservation-response.dto.ts
 │   │   │   └── index.ts
+│   │   ├── processors/   # BullMQ Job Processors
+│   │   │   └── reservation-expiration.processor.ts  # Expiração automática
 │   │   ├── reservations.controller.ts     # HTTP layer
 │   │   ├── reservations.controller.spec.ts # Controller tests (15 tests)
-│   │   ├── reservations.service.ts        # Business logic + Distributed locks
+│   │   ├── reservations.service.ts        # Business logic + BullMQ producer
 │   │   ├── reservations.service.spec.ts   # Service tests (27 tests)
-│   │   └── reservations.module.ts         # Module definition
+│   │   └── reservations.module.ts         # Module + BullMQ queue registration
 │   │
-│   └── sales/            # Vendas confirmadas (pagamentos)
+│   ├── sales/            # Vendas confirmadas (pagamentos)
+│   │   ├── dto/          # Data Transfer Objects
+│   │   │   ├── create-sale.dto.ts
+│   │   │   ├── sale-response.dto.ts
+│   │   │   └── index.ts
+│   │   ├── sales.controller.ts            # HTTP layer
+│   │   ├── sales.service.ts               # Business logic + Payment confirmation
+│   │   └── sales.module.ts                # Module definition
+│   │
+│   └── users/            # Gestão de usuários
 │       ├── dto/          # Data Transfer Objects
-│       │   ├── create-sale.dto.ts
-│       │   ├── sale-response.dto.ts
+│       │   ├── create-user.dto.ts
+│       │   ├── update-user.dto.ts
+│       │   ├── user-response.dto.ts
 │       │   └── index.ts
-│       ├── sales.controller.ts            # HTTP layer
-│       ├── sales.service.ts               # Business logic + Payment confirmation
-│       └── sales.module.ts                # Module definition
+│       ├── users.controller.ts            # HTTP layer
+│       ├── users.service.ts               # Business logic
+│       └── users.module.ts                # Module definition
 │
 ├── shared/               # Código compartilhado
 │   ├── database/         # Camada de dados
@@ -128,8 +151,9 @@ src/
 │   │   │   ├── sessions.repository.ts
 │   │   │   ├── seats.repository.ts
 │   │   │   ├── reservations.repository.ts
-│   │   │   └── sales.repository.ts        # Repository de vendas
-│   │   ├── schema.ts     # Drizzle schema (sessions, seats, reservations, sales)
+│   │   │   ├── sales.repository.ts
+│   │   │   └── users.repository.ts        # Repository de usuários
+│   │   ├── schema.ts     # Drizzle schema (users, sessions, seats, reservations, sales)
 │   │   ├── drizzle.service.ts
 │   │   ├── database.module.ts (@Global)
 │   │   └── index.ts
@@ -144,13 +168,14 @@ src/
 │   ├── guards/           # Auth guards
 │   └── interceptors/     # HTTP interceptors
 │
-├── app.module.ts         # Root module (SessionsModule, ReservationsModule, SalesModule)
+├── app.module.ts         # Root module + BullMQ configuration
 └── main.ts               # Bootstrap + Swagger setup
 
 test/
 ├── app.e2e-spec.ts                        # E2E tests
-├── test-complete-flow.js                  # Script Node.js - Fluxo completo Session→Reservation→Sale
-├── test-complete-flow.sh                  # Script Bash - Fluxo completo
+├── complete-flow/
+│   ├── test-complete-flow.js              # Script Node.js - Fluxo completo
+│   └── test-complete-flow.sh              # Script Bash - Fluxo completo
 ├── test-race-condition.js                 # Script de teste de concorrência (20 usuários)
 └── test-race-condition.sh                 # Script de teste de race condition
 
@@ -523,6 +548,84 @@ Aplicação rodando em:
 - ✅ Atualiza status da reserva para `confirmed`
 - ✅ Atualiza status dos assentos de `reserved` → `sold`
 - ✅ Remove reserva do cache Redis
+- ✅ **Cancela job de expiração agendado no BullMQ** (evita processar reserva confirmada)
+
+**Fluxo de Expiração Automática:**
+1. **Criação da reserva**: Job de expiração agendado com 30s de delay
+2. **Pagamento confirmado**: Job cancelado automaticamente
+3. **Expiração**: Se não houver pagamento, job processa após 30s e expira reserva
+
+---
+
+### Users (Gestão de Usuários)
+
+#### `POST /users` - Criar Usuário
+
+**Request Body:**
+```json
+{
+  "email": "user@example.com",
+  "name": "João Silva"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "user-uuid",
+  "email": "user@example.com",
+  "name": "João Silva",
+  "createdAt": "2026-02-06T10:00:00.000Z",
+  "updatedAt": "2026-02-06T10:00:00.000Z"
+}
+```
+
+**Regras:**
+- ✅ Email deve ser único (validação no banco e no service)
+- ✅ Email validado com `class-validator` (@IsEmail)
+- ✅ Nome obrigatório (mínimo 3 caracteres)
+
+**Possíveis Erros:**
+- `409 Conflict` - Email já cadastrado
+
+#### `GET /users` - Listar Usuários
+
+**Response:** `200 OK`
+```json
+[
+  {
+    "id": "user-uuid",
+    "email": "user@example.com",
+    "name": "João Silva",
+    "createdAt": "2026-02-06T10:00:00.000Z",
+    "updatedAt": "2026-02-06T10:00:00.000Z"
+  }
+]
+```
+
+#### `GET /users/:id` - Buscar Usuário
+
+**Response:** `200 OK` ou `404 Not Found`
+
+#### `PATCH /users/:id` - Atualizar Usuário
+
+**Request Body:** (campos opcionais)
+```json
+{
+  "name": "João Silva Atualizado",
+  "email": "newemail@example.com"
+}
+```
+
+**Response:** `200 OK`
+
+**Regras:**
+- ✅ Se alterar email, valida unicidade
+- ✅ Campos opcionais (pode atualizar apenas nome ou apenas email)
+
+#### `DELETE /users/:id` - Deletar Usuário
+
+**Response:** `204 No Content`
 
 **Possíveis Erros:**
 - `404 Not Found` - Reserva não existe
@@ -768,33 +871,149 @@ create(@Headers('idempotency-key') key: string) {
 
 ### Expiração Automática de Reservas
 
-**Processamento de reservas expiradas:**
+**Estratégia BullMQ:** Delayed Jobs para processamento garantido
+
+#### Configuração Global (AppModule)
+
 ```typescript
-// Executado por cronjob a cada X segundos
-async processExpiredReservations(): Promise<number> {
-  // 1. Buscar reservas pending que já expiraram
-  const expiredReservations = await reservationsRepository.findExpired();
+@Module({
+  imports: [
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get('REDIS_HOST'),
+          port: config.get('REDIS_PORT'),
+        },
+        defaultJobOptions: {
+          attempts: 3,                    // Retry até 3x
+          backoff: {
+            type: 'exponential',          // 1s, 2s, 4s
+            delay: 1000,
+          },
+          removeOnComplete: true,         // Limpa jobs completados
+          removeOnFail: false,            // Mantém jobs falhados para debug
+        },
+      }),
+    }),
+  ],
+})
+```
+
+#### Registro de Fila (ReservationsModule)
+
+```typescript
+@Module({
+  imports: [
+    BullModule.registerQueue({
+      name: 'reservation-expiration',    // Nome da fila
+    }),
+  ],
+  providers: [
+    ReservationExpirationProcessor,      // Worker que processa jobs
+  ],
+})
+```
+
+#### Producer (ReservationsService)
+
+```typescript
+@Injectable()
+export class ReservationsService {
+  constructor(
+    @InjectQueue('reservation-expiration')
+    private expirationQueue: Queue,
+  ) {}
   
-  // 2. Processar cada reserva
-  for (const reservation of expiredReservations) {
-    try {
-      // 2.1. Atualizar status para 'expired'
-      await reservationsRepository.updateStatus(reservation.id, 'expired');
-      
-      // 2.2. Liberar assentos de volta para 'available'
-      const seats = await seatsRepository.findByReservationId(reservation.id);
-      const seatIds = seats.map(s => s.id);
-      await seatsRepository.updateManyStatus(seatIds, 'available', null);
-      
-      this.logger.log(
-        `Expired reservation ${reservation.id}, released ${seatIds.length} seats`
-      );
-    } catch (error) {
-      // 2.3. Continuar processando mesmo se uma falhar
-      this.logger.error(`Failed to process expired reservation: ${error}`);
-    }
+  async create(dto: CreateReservationDto) {
+    // ... criar reserva ...
+    
+    // Agendar job de expiração com 30s de delay
+    await this.expirationQueue.add(
+      'expire-reservation',              // Nome do job
+      { reservationId: reservation.id }, // Payload
+      {
+        delay: 30000,                    // 30 segundos
+        jobId: `reservation-${reservation.id}`, // Evita duplicação
+      },
+    );
+    
+    return reservation;
   }
   
+  async cancel(id: string) {
+    // ... cancelar reserva ...
+    
+    // Remover job agendado
+    const job = await this.expirationQueue.getJob(`reservation-${id}`);
+    if (job) await job.remove();
+  }
+}
+```
+
+#### Worker Processor (ReservationExpirationProcessor)
+
+```typescript
+@Processor('reservation-expiration', {
+  concurrency: 5,                        // Processa 5 jobs simultâneos
+})
+export class ReservationExpirationProcessor extends WorkerHost {
+  async process(job: Job<{ reservationId: string }>) {
+    const { reservationId } = job.data;
+    
+    // 1. Buscar reserva
+    const reservation = await reservationsRepo.findById(reservationId);
+    if (!reservation || reservation.status !== 'pending') {
+      return; // Já foi processada ou cancelada
+    }
+    
+    // 2. Expirar reserva
+    await reservationsRepo.updateStatus(reservationId, 'expired');
+    
+    // 3. Liberar assentos
+    const seats = await seatsRepo.findByReservationId(reservationId);
+    const seatIds = seats.map(s => s.id);
+    await seatsRepo.updateManyStatus(seatIds, 'available', null);
+    
+    this.logger.log(
+      `Expired reservation ${reservationId}, released ${seatIds.length} seats`
+    );
+  }
+}
+```
+
+#### Cancelamento no Pagamento (SalesService)
+
+```typescript
+@Injectable()
+export class SalesService {
+  constructor(
+    @InjectQueue('reservation-expiration')
+    private expirationQueue: Queue,
+  ) {}
+  
+  async create(dto: CreateSaleDto) {
+    // ... validar e criar venda ...
+    
+    // Cancelar job de expiração (pagamento confirmado)
+    const job = await this.expirationQueue.getJob(
+      `reservation-${dto.reservationId}`
+    );
+    if (job) await job.remove();
+    
+    return sale;
+  }
+}
+```
+
+**Por quê BullMQ ao invés de cronjob manual?**
+- ✅ **Garantia de execução**: Job não se perde, retry automático
+- ✅ **Deduplicação**: jobId único previne duplicação
+- ✅ **Cancelamento**: Remove job quando pagamento confirmado
+- ✅ **Persistência**: Jobs sobrevivem a restart da aplicação
+- ✅ **Concorrência**: Processa múltiplas expirações em paralelo
+- ✅ **Observabilidade**: BullMQ Dashboard para monitorar jobs
   return expiredReservations.length;
 }
 ```
@@ -842,13 +1061,18 @@ src/
 │   ├── sessions/
 │   │   ├── sessions.service.spec.ts       # Unit tests
 │   │   └── sessions.controller.spec.ts    # Integration tests
-│   └── reservations/
-│       ├── reservations.service.spec.ts   # Unit tests (27 testes)
-│       └── reservations.controller.spec.ts # Integration tests (15 testes)
+│   ├── reservations/
+│   │   ├── reservations.service.spec.ts   # Unit tests (27 testes)
+│   │   └── reservations.controller.spec.ts # Integration tests (15 testes)
+│   └── redis/
+│       └── redis.service.spec.ts          # Unit tests para Redis
 test/
 ├── app.e2e-spec.ts                        # E2E tests
-├── test-complete-flow.js                  # Script Node.js - Fluxo completo
-└── test-complete-flow.sh                  # Script Bash - Fluxo completo
+├── complete-flow/
+│   ├── test-complete-flow.js              # Script Node.js - Fluxo completo
+│   └── test-complete-flow.sh              # Script Bash - Fluxo completo
+├── test-race-condition.js                 # Script de teste de concorrência (20 usuários)
+└── test-race-condition.sh                 # Script de teste de race condition
 ```
 
 ### Scripts de Teste End-to-End
@@ -857,10 +1081,10 @@ test/
 
 ```bash
 # Versão Node.js (recomendado)
-node test-complete-flow.js
+node test/complete-flow/test-complete-flow.js
 
 # Versão Bash (alternativa)
-./test-complete-flow.sh
+./test/complete-flow/test-complete-flow.sh
 ```
 
 **Fluxo testado:**
@@ -871,6 +1095,21 @@ node test-complete-flow.js
 5. ✅ Confirmar pagamento (criar venda)
 6. ✅ Validar assentos mudaram de `reserved` → `sold`
 7. ✅ Verificar histórico de compras do usuário
+
+**Teste de Concorrência**: Simula 20 usuários tentando reservar os mesmos assentos
+
+```bash
+# Versão Node.js (recomendado)
+node test/test-race-condition.js
+
+# Versão Bash (alternativa)
+./test/test-race-condition.sh
+```
+
+**Objetivo:**
+- Testar locks distribuídos do Redis
+- Garantir que apenas 1 reserva seja criada por assento
+- Validar mensagens de erro para usuários bloqueados
 
 ### Executar Testes
 
@@ -938,6 +1177,45 @@ pnpm test:cov
 ---
 
 ## 📝 Changelog Recente
+
+### [2026-02-08] - BullMQ + Módulo Users
+
+**Adicionado:**
+- ✅ **BullMQ para expiração automática de reservas**
+  - Delayed jobs com 30s de atraso para processar expirações
+  - Processor `ReservationExpirationProcessor` com concurrency: 5
+  - Cancelamento automático de jobs quando pagamento confirmado
+  - Retry com backoff exponencial (3 tentativas)
+  - Deduplicação com jobId único
+
+- ✅ **Módulo Users completo**
+  - POST `/users` - Criar usuário
+  - GET `/users` - Listar todos os usuários
+  - GET `/users/:id` - Buscar usuário por ID
+  - PATCH `/users/:id` - Atualizar usuário
+  - DELETE `/users/:id` - Deletar usuário
+  - Validação de email único
+  - Repository pattern para acesso a dados
+
+**Estrutura do Banco Atualizada:**
+```sql
+-- Tabela users
+CREATE TABLE "users" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "email" varchar(255) NOT NULL UNIQUE,
+  "name" varchar(255) NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL
+);
+```
+
+**Dependências Adicionadas:**
+```json
+{
+  "bullmq": "^5.67.3",
+  "@nestjs/bullmq": "^11.0.4"
+}
+```
 
 ### [2026-02-07] - Completado Módulo Sales + Endpoint de Assentos
 
