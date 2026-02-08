@@ -4,6 +4,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import {
   ReservationsRepository,
   SalesRepository,
@@ -17,6 +19,7 @@ import { CreateSaleDto, SaleResponseDto } from './dto';
  * SalesService - Handles payment confirmation and sale finalization
  *
  * Converts pending reservations into confirmed sales
+ * Cancels scheduled expiration job when payment is confirmed
  * Updates seat status and removes reservation from cache
  * Follows Single Responsibility: only sale logic
  */
@@ -30,6 +33,8 @@ export class SalesService {
     private readonly sessionsRepository: SessionsRepository,
     private readonly seatsRepository: SeatsRepository,
     private readonly redisService: RedisService,
+    @InjectQueue('reservation-expiration')
+    private readonly expirationQueue: Queue,
   ) {}
 
   /**
@@ -43,6 +48,7 @@ export class SalesService {
    * 5. Update reservation status to confirmed
    * 6. Update seats status to sold
    * 7. Remove reservation from cache
+   * 8. Cancel scheduled expiration job
    *
    * @param dto - Sale creation data
    * @returns Sale details
@@ -129,7 +135,20 @@ export class SalesService {
     // 10. Remove reservation from cache
     await this.redisService.del(`reservation:${reservationId}`);
 
-    // 11. Build response
+    // 11. Cancel scheduled expiration job (payment confirmed, no need to expire)
+    try {
+      const job = await this.expirationQueue.getJob(`reservation-${reservationId}`);
+      if (job) {
+        await job.remove();
+        this.logger.log(`Cancelled expiration job for reservation ${reservationId}`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to cancel expiration job for reservation ${reservationId}: ${error.message}`,
+      );
+    }
+
+    // 12. Build response
     return {
       id: sale.id,
       reservationId: sale.reservationId,

@@ -5,6 +5,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
 import { ReservationsRepository } from '@/shared/database/repositories/reservations.repository';
 import { SeatsRepository } from '@/shared/database/repositories/seats.repository';
@@ -16,6 +18,7 @@ import { CreateReservationDto, ReservationResponseDto } from './dto';
  * ReservationsService - Handles seat reservation business logic
  *
  * Implements distributed locking with Redis to prevent double-booking
+ * Uses BullMQ for automatic expiration processing
  * Uses Repository Pattern for data access (Dependency Inversion)
  * Follows Single Responsibility: only reservation logic
  */
@@ -30,6 +33,8 @@ export class ReservationsService {
     private readonly seatsRepository: SeatsRepository,
     private readonly sessionsRepository: SessionsRepository,
     private readonly redisService: RedisService,
+    @InjectQueue('reservation-expiration')
+    private readonly expirationQueue: Queue,
   ) {}
 
   /**
@@ -42,7 +47,8 @@ export class ReservationsService {
    * 4. Validate seats availability in database
    * 5. Create reservation with TTL
    * 6. Update seats status to 'reserved'
-   * 7. Release locks
+   * 7. Schedule expiration job (BullMQ)
+   * 8. Release locks
    *
    * @param dto - Reservation data
    * @returns Reservation details with expiration info
@@ -160,7 +166,22 @@ export class ReservationsService {
           this.RESERVATION_TTL_SECONDS,
         );
 
-        // 9. Build response
+        // 9. Schedule expiration job with BullMQ (delayed by 30 seconds)
+        await this.expirationQueue.add(
+          'expire-reservation',
+          { reservationId: reservation.id },
+          {
+            delay: this.RESERVATION_TTL_SECONDS * 1000, // 30 segundos em ms
+            jobId: `reservation-${reservation.id}`, // Evitar duplicatas
+            removeOnComplete: true,
+          },
+        );
+
+        this.logger.log(
+          `Scheduled expiration job for reservation ${reservation.id} in ${this.RESERVATION_TTL_SECONDS}s`,
+        );
+
+        // 10. Build response
         const remainingSeconds = Math.max(
           0,
           Math.floor((expiresAt.getTime() - Date.now()) / 1000),
@@ -296,6 +317,7 @@ export class ReservationsService {
    * Cancel a reservation
    *
    * Releases seats back to available status
+   * Removes scheduled expiration job from BullMQ
    * @param id - Reservation ID
    */
   async cancel(id: string): Promise<void> {
@@ -324,7 +346,22 @@ export class ReservationsService {
     // Remove from cache
     await this.redisService.del(`reservation:${id}`);
 
-    this.logger.log(`Reservation ${id} cancelled, ${seatIds.length} seats released`);
+    // Remove scheduled expiration job from queue
+    try {
+      const job = await this.expirationQueue.getJob(`reservation-${id}`);
+      if (job) {
+        await job.remove();
+        this.logger.log(`Removed expiration job for reservation ${id}`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to remove expiration job for reservation ${id}: ${error.message}`,
+      );
+    }
+
+    this.logger.log(
+      `Reservation ${id} cancelled, ${seatIds.length} seats released`,
+    );
   }
 
   /**
